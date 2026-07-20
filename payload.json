@@ -1,0 +1,100 @@
+{
+  "status": "success",
+  "message": null,
+  "record": {
+    "status": 1,
+    "location": "Al Furjan West",
+    "agencyName": "Banke Properties",
+ 
+    "agent_details": {
+      "name": "Divine  Ansale",
+      "mobile": "971 56 974 8389",
+      "email": "cs@banke.ae",
+      "job_title": "Team Leader CRM",
+      "image": "https://bankelive.s3.eu-central-1.amazonaws.com/storage/gallery/1749729935-crm-photo.jpg"
+    },
+    "listings": [
+      {
+        "id": 42758,
+        "slug": "brand-new-duplex-open-views-high-roi-bi-s-20-18255",
+        "public_url": "https://web.bankeproperties.com/listings/brand-new-duplex-open-views-high-roi-bi-s-20-18255",
+        "title": "Priced to Sell | Brand New Penthouse | With Maids Room | Chiller Free",
+        "property_location": "Equiti Home, Al Furjan, Dubai",
+        "price": 3400000,
+        "listing_for": "UAE",
+        "frequency": "Yearly",
+        "beds": 4,
+        "baths": 5,
+        "build_up_area": 3436,
+        "images": [
+          { "id": 3392112, "url": "https://bankelive.s3.eu-central-1.amazonaws.com/storage/gallery/1778237969-bi-s-20-18255-2.jpg" }
+        ]
+      },
+      {
+        "id": 44746,
+        "slug": "ultra-luxury-corner-sinle-row-rare-oppurtunity-bi-r-20-21883",
+        "public_url": "https://web.bankeproperties.com/listings/ultra-luxury-corner-sinle-row-rare-oppurtunity-bi-r-20-21883",
+        "title": "ULTRA LUXURY | CORNER | SINGLE ROW | RARE",
+        "property_location": "Al Furjan West, Al Furjan, Dubai",
+        "price": 560000,
+        "listing_for": "UAE",
+        "frequency": "Yearly",
+        "beds": 5,
+        "baths": 7,
+        "build_up_area": 6458,
+        "images": [
+          { "id": 3324540, "url": "https://bankelive.s3.eu-central-1.amazonaws.com/storage/gallery/1780835260-afedbb63-a3be-4b46-b3f7-deb8a469c3f7.JPEG" }
+        ]
+      },
+      {
+        "id": 41794,
+        "slug": "landscaped-vacant-single-row-with-drivers-room-bi-r-20-20134",
+        "public_url": "https://web.bankeproperties.com/listings/landscaped-vacant-single-row-with-drivers-room-bi-r-20-20134",
+        "title": "Driver and Maid Room | Landscaped | Single Row ",
+        "property_location": "Tilal Al Furjan, Al Furjan, Dubai",
+        "price": 400000,
+        "listing_for": "UAE",
+        "frequency": "Yearly",
+        "beds": 5,
+        "baths": 6,
+        "build_up_area": 5146,
+        "images": [
+          { "id": 3397306, "url": "https://bankelive.s3.eu-central-1.amazonaws.com/storage/gallery/1777295689-whatsapp-image-2026-04-24-at-3-51-29-pm-1.jpeg" }
+        ]
+      },
+      {
+        "id": 38546,
+        "slug": "premium-location-i-type-b-large-plot-i-next-to-pool-and-park-bi-s-20-16457",
+        "public_url": "https://web.bankeproperties.com/listings/premium-location-i-type-b-large-plot-i-next-to-pool-and-park-bi-s-20-16457",
+        "title": "BEST PRICEI TYPE B LARGE PLOT I INDP VILLA PHASE",
+        "property_location": "Tilal Al Furjan, Al Furjan, Dubai",
+        "price": 8300000,
+        "listing_for": "UAE",
+        "frequency": null,
+        "beds": 4,
+        "baths": 5,
+        "build_up_area": 6657,
+        "images": [
+          { "id": 3329588, "url": "https://bankelive.s3.eu-central-1.amazonaws.com/storage/gallery/plain/1753267908-001-plain.jpg" }
+        ]
+      },
+      {
+        "id": 44713,
+        "slug": "close-to-pool-and-park-landscaped-type-b-vacant-huge-plot-bi-s-20-19144",
+        "public_url": "https://web.bankeproperties.com/listings/close-to-pool-and-park-landscaped-type-b-vacant-huge-plot-bi-s-20-19144",
+        "title": "Prime Internal Location | Landscaped  | Huge Plot | Vacant",
+        "property_location": "Tilal Al Furjan, Al Furjan, Dubai",
+        "price": 8500000,
+        "listing_for": "UAE",
+        "frequency": "Yearly",
+        "beds": 4,
+        "baths": 5,
+        "build_up_area": 4850,
+        "images": [
+          { "id": 3319477, "url": "https://bankelive.s3.eu-central-1.amazonaws.com/storage/gallery/1780996268-dsc03649.jpg" }
+        ]
+      }
+    ]
+  },
+  "meta": null
+}
