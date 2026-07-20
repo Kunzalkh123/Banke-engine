@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>{{location}} — Portfolio Brochure</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Helvetica, Arial, sans-serif; color: #14140f; }
+  .serif { font-family: Georgia, 'Times New Roman', serif; }
+
+  :root {
+    --brand-dark: #1b1e1c;
+    --brand-green: #22332c;
+    --text-muted: #7a7d79;
+    --border-light: #e3e3de;
+  }
+
+  .hero {
+    position: relative;
+    height: 400px;
+    background-image: url('{{{headerImagePath}}}');
+    background-size: cover;
+    background-position: center;
+    color: #fff;
+  }
+  .hero::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.05) 35%, rgba(0,0,0,0.75) 100%);
+  }
+  .hero-top {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 24px 40px 0;
+  }
+  .hero-brand {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 3px;
+  }
+  .hero-logo { height: 34px; }
+  .hero-bottom {
+    position: absolute;
+    z-index: 1;
+    left: 0; right: 0; bottom: 0;
+    padding: 0 40px 26px;
+  }
+  .hero-eyebrow {
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 2.5px;
+    opacity: 0.85;
+    margin-bottom: 10px;
+  }
+  .hero-headline {
+    font-size: 34px;
+    line-height: 1.18;
+    font-weight: 700;
+  }
+  .hero-headline em { font-style: italic; font-weight: 400; }
+
+  .stats-bar {
+    display: flex;
+    border-bottom: 1px solid var(--border-light);
+  }
+  .stat {
+    flex: 1;
+    text-align: center;
+    padding: 18px 6px;
+    border-right: 1px solid var(--border-light);
+  }
+  .stat:last-child { border-right: none; }
+  .stat-value { font-size: 15px; font-weight: 700; margin-bottom: 3px; }
+  .stat-label { font-size: 9.5px; letter-spacing: 0.8px; color: var(--text-muted); text-transform: uppercase; }
+
+  .description {
+    text-align: center;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: #4a4a45;
+    padding: 22px 70px;
+  }
+
+  .portfolio-section { padding: 4px 40px 30px; }
+  .section-eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .section-title {
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 18px;
+  }
+
+  .listings-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .listing-card {
+    width: calc(33.333% - 11px);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    overflow: hidden;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .listing-image {
+    position: relative;
+    height: 148px;
+    background-size: cover;
+    background-position: center;
+    background-color: #d8d8d2;
+  }
+  .listing-badge {
+    position: absolute;
+    left: 0;
+    background: var(--brand-green);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    padding: 5px 10px;
+  }
+  .listing-badge.location { top: 0; }
+  .listing-badge.price { bottom: 0; text-transform: none; font-size: 11px; }
+
+  .listing-body { padding: 12px 14px 14px; }
+  .listing-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    line-height: 1.35;
+    margin-bottom: 8px;
+    min-height: 33px;
+  }
+  .listing-stats {
+    display: flex;
+    gap: 10px;
+    font-size: 10.5px;
+    color: #3a3a35;
+    margin-bottom: 10px;
+  }
+  .listing-buttons { display: flex; gap: 6px; }
+  .btn {
+    flex: 1;
+    text-align: center;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    padding: 8px 4px;
+    border-radius: 3px;
+    text-decoration: none;
+    display: block;
+  }
+  .btn-view { background: var(--brand-dark); color: #fff; }
+  .btn-enquire { background: #fff; color: var(--brand-dark); border: 1px solid var(--brand-dark); }
+
+  .footer {
+    background: var(--brand-green);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    padding: 16px 40px;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .footer-photo {
+    width: 42px; height: 42px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-right: 12px;
+  }
+  .footer-name { font-size: 13.5px; font-weight: 700; }
+  .footer-role { font-size: 10.5px; opacity: 0.75; }
+  .footer-contact { margin-left: auto; text-align: right; font-size: 11px; }
+</style>
+</head>
+<body>
+
+  <div class="hero">
+    <div class="hero-top">
+      <div class="hero-brand">{{agencyName}}</div>
+      {{#if logoPath}}
+      <img class="hero-logo" src="{{logoPath}}" alt="{{agencyName}}" />
+      {{/if}}
+    </div>
+    <div class="hero-bottom">
+      <div class="hero-eyebrow">{{header.eyebrow}}</div>
+      <div class="hero-headline serif">{{{header.headlinePlain}}} <em>{{header.headlineEmphasis}}</em></div>
+    </div>
+  </div>
+
+  {{#if stats.length}}
+  <div class="stats-bar">
+    {{#each stats}}
+    <div class="stat">
+      <div class="stat-value">{{value}}</div>
+      <div class="stat-label">{{label}}</div>
+    </div>
+    {{/each}}
+  </div>
+  {{/if}}
+
+  <div class="description">{{description}}</div>
+
+  <div class="portfolio-section">
+    <div class="section-eyebrow">{{portfolioEyebrow}}</div>
+    <div class="section-title serif">{{portfolioTitle}}</div>
+
+    <div class="listings-grid">
+      {{#each listings}}
+      <div class="listing-card">
+        <div class="listing-image" style="background-image:url('{{imageUrl}}')">
+          <div class="listing-badge location">{{locationBadge}}</div>
+          {{#if priceBadge}}
+          <div class="listing-badge price">{{priceBadge}}</div>
+          {{/if}}
+        </div>
+        <div class="listing-body">
+          <div class="listing-title">{{title}}</div>
+          <div class="listing-stats">
+            <span>{{beds}} bed</span>
+            <span>{{baths}} bath</span>
+            <span>{{areaSqft}} sqft</span>
+          </div>
+          <div class="listing-buttons">
+            <a class="btn btn-view" href="{{viewUrl}}">VIEW LISTING</a>
+            <a class="btn btn-enquire" href="mailto:{{enquireEmail}}">ENQUIRE</a>
+          </div>
+        </div>
+      </div>
+      {{/each}}
+    </div>
+  </div>
+
+  {{#if agent}}
+  <div class="footer">
+    {{#if agent.photoUrl}}
+    <img class="footer-photo" src="{{agent.photoUrl}}" alt="{{agent.name}}" />
+    {{/if}}
+    <div>
+      <div class="footer-name">{{agent.name}}</div>
+      <div class="footer-role">{{agent.jobTitle}} &middot; {{agencyName}}</div>
+    </div>
+    <div class="footer-contact">{{agent.mobile}}<br />{{agent.email}}</div>
+  </div>
+  {{/if}}
+
+</body>
+</html>
