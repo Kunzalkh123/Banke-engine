@@ -5,7 +5,7 @@ const path = require('path');
 const handlebars = require('handlebars');
 const puppeteer = require('puppeteer');
 
-const { buildPortfolioBrochureData } = require('../services/portfolio.service');
+const { buildPortfolioBrochureData } = require('../service/portfolio.service');
 
 const router = express.Router();
 const OUTPUT_DIR = path.join(__dirname, '..', 'output');
@@ -24,7 +24,7 @@ router.post('/api/brochure/portfolio', async (req, res) => {
     const brochureData = await buildPortfolioBrochureData(req.body, OUTPUT_DIR);
 
     const templateSrc = fs.readFileSync(
-      path.join(__dirname, '..', 'templates', 'brochure-portfolio.template.html'),
+      path.join(__dirname, '..', 'template', 'brochure-portfolio.template.html'),
       'utf8'
     );
     const template = handlebars.compile(templateSrc);

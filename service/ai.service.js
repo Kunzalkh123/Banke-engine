@@ -1,12 +1,13 @@
 // services/ai.service.js
 //
 // Generates the brochure's marketing description, hero headline, stat bar,
-// and architecture classification using Pollinations.ai's free
-// text-generation endpoint -- no API key required.
+// and architecture classification using Groq's chat completions API.
 
 const axios = require('axios');
 
-const POLLINATIONS_TEXT_URL = 'https://text.pollinations.ai';
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_MODEL = process.env.GROQ_MODEL || 'qwen/qwen3.6-27b';
 
 function summarizeListings(listings = []) {
   if (!listings.length) return 'No listings supplied.';
@@ -30,61 +31,54 @@ function summarizeListings(listings = []) {
   ].join('\n');
 }
 
-async function callPollinationsText(prompt) {
-  const encodedPrompt = encodeURIComponent(prompt);
-  const seed = Math.floor(Math.random() * 1000000);
-  const url = `${POLLINATIONS_TEXT_URL}/${encodedPrompt}`;
+async function callGroqText(prompt) {
+  if (!GROQ_API_KEY) {
+    throw new Error('GROQ_API_KEY not set in .env');
+  }
 
-  const response = await axios.get(url, {
-    params: { seed },
-    timeout: 60000,
-  });
+  const response = await axios.post(
+    GROQ_API_URL,
+    {
+      model: GROQ_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+    },
+    {
+      headers: {
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 60000,
+    }
+  );
 
-  const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
-  return text.trim();
+  let content = response.data?.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error('Groq response missing content');
+  }
+
+  // Qwen "thinking" models emit their reasoning wrapped in <think>...</think>
+  // before the real answer -- strip that out so callers only see the
+  // final answer.
+  content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+  return content;
 }
 
-// Single, consolidated JSON extractor.
 function extractJsonPayload(rawText) {
   let candidate = rawText.trim();
 
   try {
     const direct = JSON.parse(candidate);
     if (Array.isArray(direct)) return direct;
-    if (direct && typeof direct === 'object') {
-      const wrapperKeys = ['content', 'response', 'text', 'answer', 'result', 'message', 'output', 'final', 'completion'];
-      for (const key of wrapperKeys) {
-        if (typeof direct[key] === 'string') {
-          try {
-            return extractJsonPayload(direct[key]);
-          } catch (e) {
-            // fall through
-          }
-        }
-      }
-      // No wrapper key worked -- last resort, search every string value
-      // in the object for embedded JSON matching what we need.
-      for (const key of Object.keys(direct)) {
-        if (typeof direct[key] === 'string' && key !== 'role') {
-          const nestedMatch = direct[key].match(/\{[\s\S]*?"eyebrow"[\s\S]*?\}/);
-          if (nestedMatch) {
-            try {
-              return JSON.parse(nestedMatch[0].replace(/,\s*([\]}])/g, '$1'));
-            } catch (e) {
-              // fall through
-            }
-          }
-        }
-      }
-      return direct;
-    }
+    if (direct && typeof direct === 'object') return direct;
   } catch (e) {
-    // not directly parseable -- fall through to bracket extraction below
+    // fall through
   }
 
   const cleaned = candidate.replace(/```json|```/g, '').trim();
   const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
-  const objectMatch = cleaned.match(/\{[^{}]*"eyebrow"[\s\S]*?\}(?!\s*[,}])/) || cleaned.match(/\{[\s\S]*\}/);
+  const objectMatch = cleaned.match(/\{[\s\S]*\}/);
   const jsonText = arrayMatch ? arrayMatch[0] : objectMatch ? objectMatch[0] : cleaned;
   const fixedText = jsonText.replace(/,\s*([\]}])/g, '$1');
   return JSON.parse(fixedText);
@@ -104,11 +98,13 @@ ${listingSummary}
 Write EXACTLY 2 short sentences (no more than 35 words total), confident but not salesy, in
 the style of a boutique property agency. Mention the number of listings and the price range
 briefly. Do not use exclamation points, emojis, or markdown. Return only the description
-text, nothing else.`;
+text, nothing else. Do not include any reasoning or explanation.`;
 
   try {
-    const text = await callPollinationsText(prompt);
-    return text || fallback || defaultFallback(location, listings);
+    const text = await callGroqText(prompt);
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    const trimmed = sentences.slice(0, 2).join(' ').trim();
+    return trimmed || fallback || defaultFallback(location, listings);
   } catch (err) {
     console.error('[ai.service] Description generation failed, using fallback:', err.message);
     return fallback || defaultFallback(location, listings);
@@ -126,7 +122,8 @@ Community: ${location}
 Listing data (for context only, do not quote numbers in the headline):
 ${listingSummary}
 
-Return ONLY a JSON object (no markdown, no code fences, no preamble) with exactly these keys:
+Return ONLY a JSON object (no markdown, no code fences, no preamble, no reasoning, no explanation)
+with exactly these keys:
 {
   "eyebrow": "short uppercase-style label, e.g. a location breadcrumb, under 40 characters",
   "headlinePlain": "first part of a two-part headline, plain style, under 40 characters",
@@ -134,27 +131,15 @@ Return ONLY a JSON object (no markdown, no code fences, no preamble) with exactl
 }
 
 Tone: confident, editorial, boutique property agency. No exclamation points, no emojis.
-The full headline (headlinePlain + headlineEmphasis) should read as one natural sentence
-when concatenated with a space.`;
+Your entire response must be nothing but the JSON object itself.`;
 
   try {
-    const responseText = await callPollinationsText(prompt);
-    console.log(`[ai.service] Raw header response (${responseText.length} chars): ${responseText.slice(0, 800)}`);
+    const responseText = await callGroqText(prompt);
+    console.log(`[ai.service] Raw header response: ${responseText.slice(0, 500)}`);
     const parsed = extractJsonPayload(responseText);
-
-    if (
-      parsed &&
-      typeof parsed.eyebrow === 'string' &&
-      typeof parsed.headlinePlain === 'string' &&
-      typeof parsed.headlineEmphasis === 'string'
-    ) {
-      return {
-        eyebrow: parsed.eyebrow,
-        headlinePlain: parsed.headlinePlain,
-        headlineEmphasis: parsed.headlineEmphasis,
-      };
+    if (parsed && parsed.eyebrow && parsed.headlinePlain && parsed.headlineEmphasis) {
+      return parsed;
     }
-
     throw new Error('AI header response missing required keys');
   } catch (err) {
     console.error('[ai.service] Header generation failed, using fallback:', err.message);
@@ -167,8 +152,8 @@ async function generateStats({ location, listings }) {
 
 Community: ${location}, Dubai, UAE
 
-Return ONLY a JSON array (no markdown, no code fences, no preamble) of 5 to 7 objects, each with
-exactly these keys: "value" and "label".
+Return ONLY a JSON array (no markdown, no code fences, no preamble, no reasoning) of 5 to 7
+objects, each with exactly these keys: "value" and "label".
 
 Each object should be a plausible, well-known real amenity, landmark, or commute time for this
 specific Dubai neighborhood -- for example: a nearby mall or retail destination, a metro station,
@@ -178,11 +163,10 @@ genuinely exists near this location. Keep each "value" under 12 characters and e
 under 22 characters. Do not invent numbers that sound overly precise or false; keep travel
 times as round, believable estimates. Do not include anything about the number of listings.
 
-Return only the JSON array, nothing else.`;
+Your entire response must be nothing but the JSON array itself.`;
 
   try {
-    const responseText = await callPollinationsText(prompt);
-    console.log(`[ai.service] Raw stats response (${responseText.length} chars): ${responseText.slice(0, 800)}`);
+    const responseText = await callGroqText(prompt);
     const parsed = extractJsonPayload(responseText);
     if (Array.isArray(parsed) && parsed.length >= 3) {
       return parsed;
@@ -205,7 +189,7 @@ villas and townhouses, or for high-rise apartment towers and skyscrapers?
 Answer with EXACTLY ONE WORD, nothing else: either VILLA or TOWER.`;
 
   try {
-    const text = await callPollinationsText(prompt);
+    const text = await callGroqText(prompt);
     const cleaned = text.trim().toUpperCase();
     if (cleaned.includes('VILLA')) return 'villa';
     if (cleaned.includes('TOWER')) return 'tower';

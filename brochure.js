@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const handlebars = require('handlebars');
 const puppeteer = require('puppeteer');
-const { buildPortfolioBrochureData } = require('./services/portfolio.service');
+const { buildPortfolioBrochureData } = require('./service/portfolio.service');
 
 const OUTPUT_DIR = path.join(__dirname, 'output');
 if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
