@@ -71,18 +71,27 @@ async function callGroqText(prompt, attempt = 1, tokenBudget = 4096) {
   } catch (err) {
     const status = err.response?.status;
     if (status === 429 && attempt < maxAttempts) {
-      // Honor Groq's Retry-After header when present; otherwise back off
-      // exponentially (5s, 10s, 20s, 40s). A single brochure run can fire
-      // 5-8 Groq calls back to back (classification, image relevance
-      // checks, description, header, stats), which is enough to trip a
-      // free-tier per-minute limit -- a few seconds of backoff isn't
-      // always enough to clear that window, so this needs real headroom.
+      // Honor Groq's Retry-After header when present, but cap it -- a
+      // short Retry-After (a few seconds) means a transient per-minute
+      // burst limit, worth waiting out. A LONG one (minutes) means a
+      // daily/hourly quota is genuinely exhausted; waiting that out mid
+      // -request would hang the whole brochure generation for no benefit
+      // (rotating the API key doesn't reset this either -- rate limits are
+      // tied to the account, not the individual key). Past the cap, fail
+      // fast to the fallback copy instead of blocking on it.
       const retryAfterHeader = err.response.headers?.['retry-after'];
-      const waitMs = retryAfterHeader
+      const maxWaitMs = 60000;
+      const requestedWaitMs = retryAfterHeader
         ? Math.ceil(parseFloat(retryAfterHeader) * 1000)
         : 5000 * Math.pow(2, attempt - 1);
-      console.warn(`[ai.service] Groq rate limited (429), retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/${maxAttempts})...`);
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
+
+      if (requestedWaitMs > maxWaitMs) {
+        console.error(`[ai.service] Groq rate limited (429) with a ${Math.round(requestedWaitMs / 1000)}s Retry-After -- this looks like an exhausted daily/hourly quota, not a transient limit. Not waiting it out; using fallback instead.`);
+        throw err;
+      }
+
+      console.warn(`[ai.service] Groq rate limited (429), retrying in ${Math.round(requestedWaitMs / 1000)}s (attempt ${attempt + 1}/${maxAttempts})...`);
+      await new Promise((resolve) => setTimeout(resolve, requestedWaitMs));
       return callGroqText(prompt, attempt + 1, tokenBudget);
     }
     if (status === 413 && attempt < maxAttempts) {
