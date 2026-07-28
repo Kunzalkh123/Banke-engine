@@ -303,6 +303,19 @@ async function downloadToFile(url, outputDir, filenameHint, headers = {}) {
 // a villa community query), not to demand a perfect match. Previously this
 // used a Groq call per candidate, which added an extra point of failure
 // (timeouts, 429s) to the one path that most needs to be reliable.
+
+// Applies to EVERY category, regardless of architecture type. Catches the
+// class of mismatch where Shutterstock returns a lifestyle/tourism/portrait
+// photo that happens to match the location name in its caption/tags, but
+// isn't a photo of the place itself at all (e.g. "happy tourist woman in
+// Marina Walk" instead of a photo of Marina Walk).
+const UNIVERSAL_OFF_TOPIC_KEYWORDS = [
+  'tourist', 'tourists', 'model', 'models', 'fashion', 'portrait', 'selfie',
+  'smiling woman', 'smiling man', 'young woman', 'young man', 'couple posing',
+  'family vacation', 'lifestyle photo', 'people walking', 'friends laughing',
+  'woman in', 'man in', 'girl in', 'boy in', 'dress', 'swimwear', 'bikini',
+];
+
 const OFF_TOPIC_KEYWORDS = {
   modern_villa: ['beach resort', 'yacht', 'hotel pool', 'downtown skyline', 'high rise tower', 'coastline', 'marina', 'waterfront tower', 'cityscape', 'skyline', 'creek', 'business district', 'financial district'],
   mediterranean_villa: ['beach resort', 'yacht', 'hotel pool', 'downtown skyline', 'high rise tower', 'coastline', 'marina', 'waterfront tower', 'cityscape', 'skyline', 'creek', 'business district', 'financial district', 'tel aviv', 'israel', 'greece', 'greek island', 'santorini', 'italy', 'spain', 'portugal', 'mediterranean sea', 'europe'],
@@ -320,11 +333,15 @@ const POSITIVE_KEYWORDS = {
   mediterranean_villa: ['villa', 'house', 'home', 'residential', 'community', 'neighborhood', 'rooftop', 'townhouse'],
   luxury_estate: ['villa', 'mansion', 'house', 'estate', 'residential', 'rooftop'],
   townhouse: ['townhouse', 'villa', 'house', 'home', 'residential', 'community', 'rooftop'],
-  tower: [], // skyline/tower shots don't need a positive check -- negatives alone are enough
+  // Previously empty, meaning ANY photo passed for tower category (this is
+  // exactly what let a tourist portrait photo through for "Marina Walk").
+  // Now requires an actual building/architecture/city signal.
+  tower: ['tower', 'building', 'skyline', 'skyscraper', 'high rise', 'high-rise', 'architecture', 'cityscape', 'aerial', 'downtown', 'residential', 'apartment', 'marina', 'waterfront'],
 };
 
 function looksOffTopic(description, architectureType) {
   const lower = (description || '').toLowerCase();
+  if (UNIVERSAL_OFF_TOPIC_KEYWORDS.some((phrase) => lower.includes(phrase))) return true;
   const negatives = OFF_TOPIC_KEYWORDS[architectureType] || [];
   return negatives.some((phrase) => lower.includes(phrase));
 }
