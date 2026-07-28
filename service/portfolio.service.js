@@ -117,10 +117,13 @@ async function buildPortfolioBrochureData(rawJson, outputDir) {
     data.header.eyebrow && data.header.headlinePlain && data.header.headlineEmphasis;
 
   let headerImagePath;
+  let headerImageSource = 'manual';
   if (data.headerImage) {
     headerImagePath = await resolveLocalImage(data.headerImage, outputDir, `${slug}-header`);
   } else {
-    headerImagePath = await generateCommunityHeaderImage(data.location, outputDir, `${slug}-header`);
+    const headerImageResult = await generateCommunityHeaderImage(data.location, outputDir, `${slug}-header`);
+    headerImagePath = headerImageResult.imagePath;
+    headerImageSource = headerImageResult.source;
   }
 
   const logoPath = await resolveLocalImage(data.logoUrl, outputDir, `${slug}-logo`);
@@ -131,6 +134,23 @@ async function buildPortfolioBrochureData(rawJson, outputDir) {
     listings: data._rawListings,
     fallback: data.description,
   });
+
+  // Ensure the description renders as exactly two visual lines in the
+  // template by extracting up to two sentences and joining them with a
+  // <br/> so the Handlebars template can render line breaks.
+  let formattedDescription = (aiDescription || data.description || '').replace(/\r/g, '').trim();
+  const sentenceMatches = formattedDescription.match(/[^.!?]+[.!?]?/g) || [];
+  const sentences = sentenceMatches.map((s) => s.trim()).filter(Boolean);
+  let twoLineDesc = '';
+  if (sentences.length >= 2) {
+    twoLineDesc = sentences.slice(0, 2).join('<br/>');
+  } else if (sentences.length === 1) {
+    const words = sentences[0].split(/\s+/);
+    const mid = Math.ceil(words.length / 2);
+    twoLineDesc = words.slice(0, mid).join(' ') + '<br/>' + words.slice(mid).join(' ');
+  } else {
+    twoLineDesc = '';
+  }
 
   const aiHeader = headerIsComplete
     ? data.header
@@ -149,10 +169,11 @@ async function buildPortfolioBrochureData(rawJson, outputDir) {
 
   return {
     ...data,
-    description: aiDescription,
+    description: twoLineDesc,
     header: { ...aiHeader, ...data.header },
     stats,
     headerImagePath,
+    headerImageSource,
     logoPath,
   };
 }

@@ -47,7 +47,7 @@ async function main() {
   console.log(`Generating brochure for "${newLocation}"...`);
   const brochureData = await buildPortfolioBrochureData(templatePayload, OUTPUT_DIR);
 
-  console.log(`[brochure.js] headerImagePath from buildPortfolioBrochureData: ${brochureData.headerImagePath}`);
+  console.log(`[brochure.js] headerImagePath from buildPortfolioBrochureData: ${brochureData.headerImagePath} (source: ${brochureData.headerImageSource})`);
 
   const templateSrc = fs.readFileSync(
     path.join(__dirname, 'templates', 'brochure-portfolio.template.html'),

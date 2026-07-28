@@ -1,16 +1,32 @@
 // services/communityImageGen.service.js
 //
-// Generates a hero/header image for a community using your own deployed
-// Cloudflare Worker (free-image-generation-api), backed by Workers AI.
+// Finds a hero/header image for a community -- tries a real licensed
+// Shutterstock photo first, falls back to an AI-generated image via
+// Pollinations if Shutterstock is unavailable or turns up nothing usable,
+// and falls back to a static default image if both fail.
 
 const axios = require('axios');
+const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { classifyArchitectureType } = require('./ai.service');
+const crypto = require('crypto');
+const { classifyArchitectureType, generateImageDescription } = require('./ai.service');
 
-const IMAGE_API_URL = process.env.IMAGE_API_URL;
-const IMAGE_API_KEY = process.env.IMAGE_API_KEY;
-const MIN_VALID_IMAGE_BYTES = 5000; // real images are always much bigger than this
+const SHUTTERSTOCK_TOKEN = process.env.SHUTTERSTOCK_TOKEN;
+const SHUTTERSTOCK_SUBSCRIPTION_ID = process.env.SHUTTERSTOCK_SUBSCRIPTION_ID;
+const SHUTTERSTOCK_API_BASE = 'https://api.shutterstock.com/v2';
+const POLLINATIONS_IMAGE_BASE = 'https://image.pollinations.ai/prompt';
+const FALLBACK_HEADER_IMAGE = path.join(__dirname, '..', 'assets', 'default-header-image.svg');
+
+// Shared, reusable agents so repeated calls (search, license, retries) can
+// actually reuse the underlying TCP/TLS connection instead of paying for a
+// fresh handshake every time. Previously a brand-new Agent was created
+// inline on every request, which meant `keepAlive` never had anything to
+// reuse -- pure overhead with none of the benefit. No longer forcing IPv4;
+// let Node's default dual-stack resolution pick whichever path is faster.
+const shutterstockHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 5 });
+const shutterstockHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 5 });
 
 const KNOWN_TOWER_LOCATIONS = [
   'downtown dubai',
@@ -18,20 +34,16 @@ const KNOWN_TOWER_LOCATIONS = [
   'business bay',
   'jbr',
   'jumeirah beach residence',
-  'city walk',
   'dubai creek harbour',
   'sobha hartland',
-  'jvc',
-  'jumeirah village circle',
   'jlt',
   'jumeirah lake towers',
   'al reem island',
   'dubai south',
-  'al furjan west', // Al Furjan West has a residential tower cluster
+  'al furjan west',
   'town square',
 ];
 
-// Modern-style low-rise villa communities (flat roofs, contemporary look)
 const MODERN_VILLA_LOCATIONS = [
   'al furjan',
   'tilal al furjan',
@@ -43,9 +55,10 @@ const MODERN_VILLA_LOCATIONS = [
   'sustainable city',
   'zabeel',
   'al sufouh',
+  'jumeirah village circle',
+   'jvc',
 ];
 
-// Mediterranean-style villa communities (terracotta roofs, arches)
 const MEDITERRANEAN_VILLA_LOCATIONS = [
   'arabian ranches',
   'the springs',
@@ -58,12 +71,9 @@ const MEDITERRANEAN_VILLA_LOCATIONS = [
   'al waha',
   'layan',
   'jouri hills',
+  'Jumeirah village circle',
 ];
 
-// Ultra-luxury gated estate communities (custom mansions, golf course /
-// lake frontage, oversized plots -- e.g. Emirates Hills, which is
-// exclusively mansion-style villas built around the Montgomerie golf
-// course and a network of lakes)
 const LUXURY_ESTATE_LOCATIONS = [
   'emirates hill',
   'jumeirah golf estate',
@@ -71,9 +81,9 @@ const LUXURY_ESTATE_LOCATIONS = [
   'district one villas',
   'palma',
   'grand views',
+  'Waterfront estates',
 ];
 
-// Townhouse-style communities (attached/semi-attached, family-oriented)
 const TOWNHOUSE_LOCATIONS = [
   'villanova',
   'mudon',
@@ -85,220 +95,405 @@ const TOWNHOUSE_LOCATIONS = [
   'serena',
   'remraam',
   'arabella',
-  'jumeirah village triangle',
   'jvt',
   'motor city',
+  'city walk',
 ];
-
-// Shared composition block reused across all villa-style prompts.
-// This is the specific shot type that reliably reads as "a community"
-// rather than "a single house": a 45-degree oblique aerial angle
-// (never straight top-down, never eye-level), with a curving street
-// threading between many properties so multiple rooftops are visible
-// simultaneously in one continuous frame.
-const COMMUNITY_COMPOSITION = [
-  '45-degree oblique aerial drone angle, not straight top-down, not eye-level street view',
-  'at least 8 to 10 separate villa rooftops clearly visible in the single frame at once',
-  'one continuous curving residential road weaving between the properties and connecting them visually',
-  'villas arranged in a repeating cluster on both sides of the road, some closer to camera and some receding into the background',
-  'consistent architectural style repeated across every villa in frame',
-  'each villa separated by low walls, driveways, or landscaping -- never touching or merged together',
-  'wide-angle establishing shot of the neighborhood block, similar to a real estate drone listing photo',
-];
-
-function buildCommunityShot(subjectLines, extraLines) {
-  return [...subjectLines, ...COMMUNITY_COMPOSITION, ...extraLines].join(', ');
-}
-
-async function buildPrompt(location) {
-  const normalized = (location || '').toLowerCase();
-  let architectureType;
-
-  if (findMatch(normalized, MODERN_VILLA_LOCATIONS)) {
-    architectureType = 'modern_villa';
-    console.log(`[communityImageGen] "${location}" -- matched Modern Villa`);
-  } else if (findMatch(normalized, MEDITERRANEAN_VILLA_LOCATIONS)) {
-    architectureType = 'mediterranean_villa';
-    console.log(`[communityImageGen] "${location}" -- matched Mediterranean Villa`);
-  } else if (findMatch(normalized, LUXURY_ESTATE_LOCATIONS)) {
-    architectureType = 'luxury_estate';
-    console.log(`[communityImageGen] "${location}" -- matched Luxury Estate`);
-  } else if (findMatch(normalized, TOWNHOUSE_LOCATIONS)) {
-    architectureType = 'townhouse';
-    console.log(`[communityImageGen] "${location}" -- matched Townhouse`);
-  } else if (findMatch(normalized, KNOWN_TOWER_LOCATIONS)) {
-    architectureType = 'tower';
-    console.log(`[communityImageGen] "${location}" -- matched Tower`);
-  } else {
-    const aiResult = await classifyArchitectureType(location);
-    architectureType = aiResult === 'villa' ? 'modern_villa' : 'tower';
-    console.log(`[communityImageGen] "${location}" -- AI classified as: ${aiResult} -> using ${architectureType}`);
-  }
-
-  // ------------------------------------------------------------------
-  // MODERN VILLA
-  // ------------------------------------------------------------------
-  if (architectureType === 'modern_villa') {
-    return buildCommunityShot(
-      [
-        `Professional aerial drone photograph of the ${location} neighborhood, Dubai, UAE`,
-        'cream and beige contemporary flat-roof villas',
-        'large glass windows and elegant entrance facades',
-        'small private gardens and covered parking for each villa',
-        'palm trees lining the curving road',
-      ],
-      [
-        'golden hour lighting, soft long shadows',
-        'ultra realistic architectural photography, natural colors, slight film grain',
-        'no apartment towers, no skyscrapers, no commercial buildings',
-        'not CGI, not illustration, no text, no watermark',
-      ]
-    );
-  }
-
-  // ------------------------------------------------------------------
-  // MEDITERRANEAN VILLA
-  // ------------------------------------------------------------------
-  if (architectureType === 'mediterranean_villa') {
-    return buildCommunityShot(
-      [
-        `Professional aerial drone photograph of the ${location} neighborhood, Dubai, UAE`,
-        'cream-colored villas with terracotta roof tiles',
-        'decorative arches and balconies',
-        'lush trees and small front gardens for each villa',
-      ],
-      [
-        'warm sunset lighting',
-        'real estate photography, photorealistic, natural lighting, slight atmospheric haze',
-        'no skyscrapers, no apartment towers',
-        'not CGI, no text, no watermark',
-      ]
-    );
-  }
-
-  // ------------------------------------------------------------------
-  // LUXURY ESTATES
-  // ------------------------------------------------------------------
-  if (architectureType === 'luxury_estate') {
-    return buildCommunityShot(
-      [
-        `Professional aerial drone photograph of the ${location} gated community, Dubai, UAE`,
-        'large custom-built mansion-style villas, cream and stone facades, flat and low-pitched roofs',
-        'oversized landscaped plots with private pools, mature palm trees, manicured lawns',
-        'glimpse of a golf course fairway and a lake edge in the background',
-        'gated community perimeter, quiet curving internal roads',
-      ],
-      [
-        'golden hour sunlight, long shadows',
-        'ultra realistic architectural photography, natural colors, sharp details, slight atmospheric haze',
-        'no apartment buildings, no skyscrapers',
-        'not CGI, no text, no watermark',
-      ]
-    );
-  }
-
-  // ------------------------------------------------------------------
-  // TOWNHOUSES
-  // ------------------------------------------------------------------
-  if (architectureType === 'townhouse') {
-    return buildCommunityShot(
-      [
-        `Professional aerial drone photograph of the ${location} neighborhood, Dubai, UAE`,
-        'modern attached townhouses, contemporary architecture',
-        'small front gardens, covered parking',
-        'nearby family park and playground visible',
-      ],
-      [
-        'golden hour lighting',
-        'realistic architectural photography, natural colors, slight film grain',
-        'no high-rise buildings, no commercial towers',
-        'not CGI, no text, no watermark',
-      ]
-    );
-  }
-
-  // ------------------------------------------------------------------
-  // TOWERS (UNCHANGED)
-  // ------------------------------------------------------------------
-  return [
-    `Real aerial drone photograph of ${location}, Dubai, UAE`,
-    'mixed-use residential community, modern high-rise apartment towers, luxury podium with retail promenade',
-    'illuminated storefronts, glass curtain wall buildings, busy urban skyline',
-    'warm architectural lighting, clean roads and walkways, natural city atmosphere',
-    'real estate photography, captured with a DJI Mavic 3 drone, 120m altitude, 35mm equivalent lens',
-    'true-to-life colors, slightly imperfect exposure, realistic reflections, faint sensor noise, natural film grain',
-    'subtle atmospheric haze, high dynamic range, sharp architectural details',
-    'candid documentary photography, not overly symmetrical, not overly polished, editorial photography',
-    'no text, no watermark, not CGI, not illustration, not airbrushed, not overly smooth or plastic-looking',
-  ].join(', ');
-}
 
 function findMatch(normalized, list) {
   return list.some((name) => normalized.includes(name));
 }
 
-async function requestImage(prompt) {
+// Hand-written, accurate visual descriptions for well-known named
+// communities -- used as the AI-fallback prompt in place of Groq's guess
+// or the generic per-category template. These are curated once, here, so
+// the AI path doesn't depend on Groq happening to "know" a specific
+// neighborhood accurately (it often doesn't, and drifts to something
+// generic or wrong). Keyed by the same lowercase substrings used for
+// architecture-type classification above.
+const LOCATION_VISUAL_HINTS = {
+  'arabian ranches': 'Spanish Mission style villas with sand and terracotta toned stucco walls, red-brown tiled roofs, arched doorways, golf course fairways and lakes running through the community, palm-lined curving streets, low-rise (no towers)',
+  'the springs': 'low-rise Mediterranean-style townhomes and villas around a series of connected lakes, cream and beige stucco walls, terracotta roofs, landscaped waterfront paths',
+  'the meadows': 'low-rise villas with private gardens around a lake, cream stucco walls, terracotta roofs, mature palm and tree landscaping',
+  'the lakes': 'low-rise villa community around interconnected lakes, cream and sand toned facades, terracotta roofs, lush landscaping',
+  'jumeirah islands': 'low-rise villas on man-made islands surrounded by lakes and canals, Mediterranean-style architecture, private gardens',
+  'al furjan': 'modern minimalist low-rise villas with clean geometric facades, light stucco and stone finishes, flat or low-pitched roofs, quiet suburban streets',
+  'dubai hills estate': 'modern low-rise villas and townhouses bordering a golf course, contemporary architecture, light-toned facades, tree-lined streets',
+  'jumeirah village circle': 'a mix of low-rise villas and mid-rise apartment buildings arranged in a circular community layout, modern facades, palm-lined roads',
+  'emirates hill': 'large luxury mansions on a golf course, gated estate with mature landscaping, expansive private villas, low-rise (no towers)',
+  'jumeirah golf estate': 'luxury villas and mansions along a championship golf course, contemporary architecture, manicured fairways and lakes',
+  'al barari': 'luxury villas surrounded by dense tropical botanical landscaping and lakes, glass and wood modern architecture, lush greenery',
+  'villanova': 'modern low-rise townhouses in tidy rows, light-toned facades, small private gardens, suburban streets',
+  'damac hills': 'villas and townhouses around a golf course (Trump International Golf Club), modern architecture, landscaped fairways',
+  'motor city': 'modern townhouses and low-rise apartments near a racetrack-themed masterplan, contemporary facades, palm-lined streets',
+  'city walk': 'low-rise townhouses and boutique retail buildings, contemporary urban architecture, tree-lined pedestrian streets',
+  'downtown dubai': 'dense cluster of ultra-modern glass skyscrapers including the Burj Khalifa, with the Dubai Fountain lake in the foreground',
+  'dubai marina': 'a dense skyline of modern glass residential towers lining a marina waterway filled with yachts and boats',
+  'business bay': 'dense modern glass high-rise towers along the Dubai Canal waterway, contemporary skyscrapers, no villas',
+  'jbr': 'a row of modern high-rise residential towers directly on a sandy beach along the Arabian Gulf coastline',
+  'jumeirah beach residence': 'a row of modern high-rise residential towers directly on a sandy beach along the Arabian Gulf coastline',
+  'dubai creek harbour': 'modern glass residential towers along a waterway with a marina, Downtown Dubai skyline visible in the distance',
+  'jlt': 'white and glass high-rise residential towers in a sweeping arc layout around interconnected artificial lakes, manicured park, palm trees',
+  'jumeirah lake towers': 'white and glass high-rise residential towers in a sweeping arc layout around interconnected artificial lakes, manicured park, palm trees',
+};
+
+function getLocationHint(location) {
+  const normalized = (location || '').toLowerCase();
+  const key = Object.keys(LOCATION_VISUAL_HINTS).find((k) => normalized.includes(k));
+  return key ? LOCATION_VISUAL_HINTS[key] : null;
+}
+
+// Deterministic pseudo-random index in [0, max) seeded by a string.
+// Same location always maps to the same index (stable re-renders of the
+// same brochure), but different locations spread across different indices
+// instead of everyone piling onto results[0].
+function seededIndex(seedStr, max) {
+  const hash = crypto.createHash('md5').update(seedStr).digest('hex');
+  const n = parseInt(hash.slice(0, 8), 16);
+  return n % max;
+}
+
+// Classifies architecture type and builds both a stock-photo SEARCH QUERY
+// and an AI image-generation PROMPT per type, with the actual location
+// folded in so locations sharing a category don't all resolve identically.
+async function buildSearchQuery(location) {
+  const normalized = (location || '').toLowerCase();
+  let architectureType;
+
+  if (findMatch(normalized, MODERN_VILLA_LOCATIONS)) {
+    architectureType = 'modern_villa';
+  } else if (findMatch(normalized, MEDITERRANEAN_VILLA_LOCATIONS)) {
+    architectureType = 'mediterranean_villa';
+  } else if (findMatch(normalized, LUXURY_ESTATE_LOCATIONS)) {
+    architectureType = 'luxury_estate';
+  } else if (findMatch(normalized, TOWNHOUSE_LOCATIONS)) {
+    architectureType = 'townhouse';
+  } else if (findMatch(normalized, KNOWN_TOWER_LOCATIONS)) {
+    architectureType = 'tower';
+  } else {
+    const aiResult = await classifyArchitectureType(location);
+    architectureType = aiResult === 'villa' ? 'modern_villa' : 'tower';
+  }
+
+  console.log(`[communityImageGen] "${location}" -- classified as: ${architectureType}`);
+
+  const aiPrompts = {
+    modern_villa: 'professional real estate photography, aerial drone shot close enough to clearly show rows of modern minimalist villa rooftops and houses, Dubai, golden hour lighting, clean architecture, landscaped streets',
+    mediterranean_villa: 'professional real estate photography, aerial drone shot close enough to clearly show Mediterranean style villa rooftops with terracotta tiles and houses, Dubai, golden hour lighting, palm trees, landscaped streets',
+    luxury_estate: 'professional real estate photography, aerial drone shot close enough to clearly show large luxury mansion houses and rooftops, gated estate, Dubai, golden hour lighting, manicured grounds, greenery visible but houses the main subject',
+    townhouse: 'professional real estate photography, aerial drone shot close enough to clearly show rows of modern townhouse rooftops, Dubai, golden hour lighting, tidy rows, landscaped streets',
+    tower: 'professional real estate photography, aerial drone shot, Dubai high rise residential towers skyline, golden hour lighting, modern glass architecture',
+  };
+
+  // Shutterstock query is now a strict location search -- just the place
+  // name (+ "Dubai" for disambiguation from same-named places elsewhere).
+  // No style/category words at all. The goal: if Shutterstock actually has
+  // photos of this specific place, find them; don't dilute the search with
+  // generic terms that can pull in unrelated matches. The AI fallback prompt
+  // (below) is what carries the architectural style guidance instead, since
+  // it has no location search to lean on and needs that detail to generate
+  // something plausible.
+  const cleanLocation = (location || '').trim();
+  const query = cleanLocation
+    ? (/dubai/i.test(cleanLocation) ? cleanLocation : `${cleanLocation}, Dubai`)
+    : 'Dubai';
+  const aiPrompt = cleanLocation
+    ? `${cleanLocation}, ${aiPrompts[architectureType]}`
+    : aiPrompts[architectureType];
+
+  return { query, aiPrompt, architectureType };
+}
+
+async function searchImages(query) {
+  const response = await axios.get(`${SHUTTERSTOCK_API_BASE}/images/search`, {
+    headers: { Authorization: `Bearer ${SHUTTERSTOCK_TOKEN}` },
+    params: {
+      query,
+      orientation: 'horizontal',
+      image_type: 'photo',
+      per_page: 10,
+      sort: 'popular',
+    },
+    timeout: 35000,
+    httpAgent: shutterstockHttpAgent,
+    httpsAgent: shutterstockHttpsAgent,
+    // Forcing IPv4: curl consistently connects to this exact host in
+    // under 1s with the same network/auth, while axios intermittently
+    // hangs until timeout. That pattern points at a broken/blackholed
+    // IPv6 route for this host -- curl's Happy Eyeballs fails over to
+    // IPv4 almost instantly, but Node's default resolver doesn't, so it
+    // can sit waiting on a dead IPv6 attempt until the timeout kills it.
+    family: 4,
+    validateStatus: () => true,
+  });
+
+  if (response.status !== 200) {
+    throw new Error(`Search failed (${response.status}): ${JSON.stringify(response.data).slice(0, 300)}`);
+  }
+
+  return response.data.data || [];
+}
+
+async function licenseImage(imageId) {
   const response = await axios.post(
-    IMAGE_API_URL,
-    { prompt },
+    `${SHUTTERSTOCK_API_BASE}/images/licenses`,
     {
-      responseType: 'arraybuffer',
-      timeout: 90000,
+      images: [{ image_id: imageId, subscription_id: SHUTTERSTOCK_SUBSCRIPTION_ID, size: 'medium' }],
+    },
+    {
       headers: {
-        'Authorization': `Bearer ${IMAGE_API_KEY}`,
+        Authorization: `Bearer ${SHUTTERSTOCK_TOKEN}`,
         'Content-Type': 'application/json',
       },
+      timeout: 35000,
+      httpAgent: shutterstockHttpAgent,
+      httpsAgent: shutterstockHttpsAgent,
+      family: 4,
       validateStatus: () => true,
     }
   );
-  return response;
+
+  if (response.status !== 200 && response.status !== 201) {
+    throw new Error(`License failed (${response.status}): ${JSON.stringify(response.data).slice(0, 300)}`);
+  }
+
+  const licensed = response.data.data?.[0];
+  const downloadUrl = licensed?.download?.url;
+  if (!downloadUrl) {
+    throw new Error(`No download URL in license response: ${JSON.stringify(response.data).slice(0, 300)}`);
+  }
+  return downloadUrl;
 }
 
-async function generateCommunityHeaderImage(location, outputDir, filenameHint) {
-  if (!IMAGE_API_URL || !IMAGE_API_KEY) {
-    console.error('[communityImageGen] IMAGE_API_URL or IMAGE_API_KEY not set in .env -- skipping image generation.');
+async function downloadToFile(url, outputDir, filenameHint, headers = {}) {
+  const response = await axios.get(url, {
+    responseType: 'arraybuffer',
+    validateStatus: () => true,
+    headers,
+    timeout: 30000,
+  });
+
+  if (response.status !== 200) {
+    // Try to surface whatever the server actually said -- arraybuffer
+    // responses need decoding to read as text, and this is best-effort
+    // since an error body isn't guaranteed to be valid UTF-8/JSON.
+    let bodyPreview = '';
+    try {
+      bodyPreview = Buffer.from(response.data).toString('utf8').slice(0, 300);
+    } catch (e) {
+      bodyPreview = '(could not decode response body)';
+    }
+    console.error(`[communityImageGen] Download failed (${response.status}) from ${url.slice(0, 120)}... -- response: ${bodyPreview}`);
+    throw new Error(`Download failed (${response.status})`);
+  }
+
+  const contentType = response.headers['content-type'] || '';
+  let ext = '.jpg';
+  if (contentType.includes('png')) ext = '.png';
+  else if (contentType.includes('webp')) ext = '.webp';
+
+  const localPath = path.join(outputDir, `${filenameHint}${ext}`);
+  fs.writeFileSync(localPath, response.data);
+  return localPath;
+}
+
+// --- Local relevance filter (no network call, can't time out or rate-limit) ---
+// A handful of obvious off-topic signals per category. This is deliberately
+// loose -- the goal is only to skip a clearly wrong photo (a beach resort for
+// a villa community query), not to demand a perfect match. Previously this
+// used a Groq call per candidate, which added an extra point of failure
+// (timeouts, 429s) to the one path that most needs to be reliable.
+const OFF_TOPIC_KEYWORDS = {
+  modern_villa: ['beach resort', 'yacht', 'hotel pool', 'downtown skyline', 'high rise tower', 'coastline', 'marina', 'waterfront tower', 'cityscape', 'skyline', 'creek', 'business district', 'financial district'],
+  mediterranean_villa: ['beach resort', 'yacht', 'hotel pool', 'downtown skyline', 'high rise tower', 'coastline', 'marina', 'waterfront tower', 'cityscape', 'skyline', 'creek', 'business district', 'financial district', 'tel aviv', 'israel', 'greece', 'greek island', 'santorini', 'italy', 'spain', 'portugal', 'mediterranean sea', 'europe'],
+  luxury_estate: ['beach resort', 'yacht club', 'hotel pool', 'downtown skyline', 'coastline', 'marina', 'cityscape', 'skyline', 'creek'],
+  townhouse: ['beach resort', 'yacht', 'golf course', 'downtown skyline', 'high rise tower', 'coastline', 'marina', 'cityscape', 'skyline', 'creek'],
+  tower: ['villa community', 'desert dunes', 'farmland'],
+};
+
+// For low-rise categories, also look for at least one positive signal that
+// the photo shows houses specifically -- catches generic-but-technically-
+// not-negative results (e.g. a plain "aerial view of Dubai coastline" shot
+// that matched the search query on relevance but shows no houses at all).
+const POSITIVE_KEYWORDS = {
+  modern_villa: ['villa', 'house', 'home', 'residential', 'community', 'neighborhood', 'rooftop', 'townhouse'],
+  mediterranean_villa: ['villa', 'house', 'home', 'residential', 'community', 'neighborhood', 'rooftop', 'townhouse'],
+  luxury_estate: ['villa', 'mansion', 'house', 'estate', 'residential', 'rooftop'],
+  townhouse: ['townhouse', 'villa', 'house', 'home', 'residential', 'community', 'rooftop'],
+  tower: [], // skyline/tower shots don't need a positive check -- negatives alone are enough
+};
+
+function looksOffTopic(description, architectureType) {
+  const lower = (description || '').toLowerCase();
+  const negatives = OFF_TOPIC_KEYWORDS[architectureType] || [];
+  return negatives.some((phrase) => lower.includes(phrase));
+}
+
+function hasPositiveSignal(description, architectureType) {
+  const positives = POSITIVE_KEYWORDS[architectureType] || [];
+  if (!positives.length) return true; // no positive check defined for this category
+  const lower = (description || '').toLowerCase();
+  return positives.some((word) => lower.includes(word));
+}
+
+// --- Shutterstock path: real licensed photo ---------------------------
+async function tryShutterstock(location, outputDir, filenameHint, query, architectureType) {
+  if (!SHUTTERSTOCK_TOKEN || !SHUTTERSTOCK_SUBSCRIPTION_ID) {
+    console.warn('[communityImageGen] SHUTTERSTOCK_TOKEN or SHUTTERSTOCK_SUBSCRIPTION_ID not set in .env; skipping Shutterstock.');
     return null;
   }
 
-  const prompt = await buildPrompt(location);
   const maxAttempts = 3;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    console.log(`[communityImageGen] Requesting image for "${location}" (attempt ${attempt}/${maxAttempts})...`);
+    console.log(`[communityImageGen] [shutterstock] Searching for "${location}" (attempt ${attempt}/${maxAttempts})...`);
 
     try {
-      const response = await requestImage(prompt);
+      const results = await searchImages(query);
 
-      if (response.status !== 200) {
-        const bodyText = Buffer.from(response.data).toString('utf8').slice(0, 300);
-        console.error(`[communityImageGen] API returned status ${response.status}: ${bodyText}`);
-      } else if (response.data.length < MIN_VALID_IMAGE_BYTES) {
-        const bodyText = Buffer.from(response.data).toString('utf8').slice(0, 300);
-        console.error(`[communityImageGen] Response too small (${response.data.length} bytes), likely an error: ${bodyText}`);
+      if (!results.length) {
+        console.error(`[communityImageGen] [shutterstock] No search results for query: "${query}"`);
       } else {
-        const contentType = response.headers['content-type'] || '';
-        let ext = '.png';
-        if (contentType.includes('jpeg')) ext = '.jpg';
-        else if (contentType.includes('webp')) ext = '.webp';
+        const startIdx = seededIndex(location || '', results.length);
+        const ordered = results.map((_, i) => (startIdx + i) % results.length);
 
-        const localPath = path.join(outputDir, `${filenameHint}${ext}`);
-        fs.writeFileSync(localPath, response.data);
-        console.log(`[communityImageGen] Saved image (${response.data.length} bytes) to ${localPath}`);
+        // Tier 1: no off-topic keyword AND has a positive house/villa signal
+        // (for categories that define one). This is the best match quality.
+        let chosenIdx = ordered.find((idx) => {
+          const description = results[idx].description || results[idx].title || '';
+          return !looksOffTopic(description, architectureType) && hasPositiveSignal(description, architectureType);
+        });
+
+        // Tier 2: no off-topic keyword, but no explicit positive signal
+        // either (description may just be sparse/generic).
+        if (chosenIdx === undefined) {
+          chosenIdx = ordered.find((idx) => {
+            const description = results[idx].description || results[idx].title || '';
+            return !looksOffTopic(description, architectureType);
+          });
+          if (chosenIdx !== undefined) {
+            console.warn(`[communityImageGen] [shutterstock] No result had an explicit house/villa signal for "${location}" -- using best available (no off-topic keywords) instead.`);
+          }
+        }
+
+        // Tier 3: everything looked off-topic. Use the seeded pick anyway --
+        // a plausible real photo beats giving up and falling to the generic
+        // AI image, as long as Shutterstock's API call itself succeeded.
+        if (chosenIdx === undefined) {
+          console.warn(`[communityImageGen] [shutterstock] Every result looked off-topic for "${location}" -- using the seeded pick anyway rather than falling back to AI.`);
+          chosenIdx = startIdx;
+        }
+
+        const candidate = results[chosenIdx];
+        const downloadUrl = await licenseImage(candidate.id);
+        const localPath = await downloadToFile(downloadUrl, outputDir, filenameHint);
+        console.log(`[communityImageGen] [shutterstock] Licensed & saved image to ${localPath} (query: "${query}", pick ${chosenIdx}/${results.length}, description: "${(candidate.description || candidate.title || '').slice(0, 80)}")`);
         return localPath;
       }
     } catch (err) {
-      console.error(`[communityImageGen] Request failed: ${err.message}`);
+      console.error(`[communityImageGen] [shutterstock] Attempt failed: ${err.message}`);
     }
 
     if (attempt < maxAttempts) {
       const waitMs = 5000 * attempt;
-      console.log(`[communityImageGen] Retrying in ${waitMs / 1000}s...`);
+      console.log(`[communityImageGen] [shutterstock] Retrying in ${waitMs / 1000}s...`);
       await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }
 
-  console.error(`[communityImageGen] All ${maxAttempts} attempts failed for "${location}".`);
+  console.error(`[communityImageGen] [shutterstock] All ${maxAttempts} attempts failed for "${location}".`);
   return null;
+}
+
+// --- AI path: Pollinations-generated image -----------------------------
+async function tryAIGeneration(location, outputDir, filenameHint, aiPrompt) {
+  console.log(`[communityImageGen] [ai] Generating image for "${location}"...`);
+
+  try {
+    // Pollinations takes the prompt directly in the URL path, plus a
+    // seed for deterministic-per-location output and a size hint.
+    const seed = parseInt(crypto.createHash('md5').update(location || '').digest('hex').slice(0, 8), 16);
+    const url = `${POLLINATIONS_IMAGE_BASE}/${encodeURIComponent(aiPrompt)}?width=1600&height=900&seed=${seed}&nologo=true`;
+
+    const localPath = await downloadToFile(url, outputDir, filenameHint, {
+      'User-Agent': 'Mozilla/5.0 (compatible; BankeBrochureEngine/1.0)',
+    });
+    console.log(`[communityImageGen] [ai] Generated & saved image to ${localPath} (prompt: "${aiPrompt}")`);
+    return localPath;
+  } catch (err) {
+    console.error(`[communityImageGen] [ai] Attempt failed: ${err.message}`);
+    return null;
+  }
+}
+
+// Returns { imagePath, source } where source is 'shutterstock', 'ai', or
+// 'fallback' -- so callers (brochure.js, templates) can tell/display which
+// pipeline actually produced the header image.
+async function generateCommunityHeaderImage(location, outputDir, filenameHint) {
+  const { query, aiPrompt, architectureType } = await buildSearchQuery(location);
+
+  const shutterstockPath = await tryShutterstock(location, outputDir, filenameHint, query, architectureType);
+  if (shutterstockPath) {
+    return { imagePath: shutterstockPath, source: 'shutterstock' };
+  }
+
+  console.log(`[communityImageGen] >>> Header image for "${location}" is AI-GENERATED (Shutterstock had no usable photo of this location).`);
+
+  // Priority 1: a hand-curated, accurate description for well-known named
+  // communities -- more reliable than Groq's guess, since Groq's knowledge
+  // of a specific micro-neighborhood is often generic or wrong. Priority 2
+  // (only if no curated hint exists): ask Groq. Priority 3: the generic
+  // per-category template.
+  const curatedHint = getLocationHint(location);
+  const groqDescription = curatedHint ? null : await generateImageDescription(location, architectureType);
+  const description = curatedHint || groqDescription;
+  if (curatedHint) {
+    console.log(`[communityImageGen] [ai] Using curated description for "${location}": "${curatedHint}"`);
+  } else if (groqDescription) {
+    console.log(`[communityImageGen] [ai] Using Groq-written description for "${location}": "${groqDescription}"`);
+  } else {
+    console.log(`[communityImageGen] [ai] No curated hint and Groq description unavailable -- using generic ${architectureType} style prompt instead.`);
+  }
+  let richAiPrompt = null;
+  if (description) {
+    // Strip any trailing punctuation before appending more text (avoids
+    // "...desert backdrop., professional..." double-punctuation), and cap
+    // overall length -- long prompts have caused Pollinations to return 500s.
+    const cleanedDescription = description.replace(/[.!?]+$/, '').trim();
+    richAiPrompt = `${location}, ${cleanedDescription}, aerial drone photography, golden hour`;
+    if (richAiPrompt.length > 220) {
+      richAiPrompt = richAiPrompt.slice(0, 220);
+    }
+  }
+
+  // Tier 1: the rich, location-specific Groq description (best quality).
+  let aiPath = richAiPrompt ? await tryAIGeneration(location, outputDir, filenameHint, richAiPrompt) : null;
+
+  // Tier 2: if that failed, fall back to the shorter, previously-reliable
+  // generic per-category prompt before giving up entirely. Pollinations
+  // only allows ONE request in flight per IP at a time -- firing tier 2
+  // immediately after tier 1 fails risks colliding with tier 1's request
+  // if it's still processing server-side even though we stopped waiting on
+  // it, which is exactly what caused "Queue full (max: 1)" errors. Wait
+  // long enough for that to clear before trying again.
+  if (!aiPath) {
+    console.log('[communityImageGen] [ai] Waiting 15s before the next attempt (Pollinations allows only one request in flight at a time)...');
+    await new Promise((resolve) => setTimeout(resolve, 15000));
+    const promptForTier2 = richAiPrompt
+      ? (() => {
+          console.log(`[communityImageGen] [ai] Rich description prompt failed -- retrying once with the generic ${architectureType} style prompt.`);
+          return aiPrompt;
+        })()
+      : aiPrompt;
+    aiPath = await tryAIGeneration(location, outputDir, filenameHint, promptForTier2);
+  }
+
+  if (aiPath) {
+    return { imagePath: aiPath, source: 'ai' };
+  }
+
+  console.error(`[communityImageGen] Both Shutterstock and AI generation failed for "${location}"; using static fallback image.`);
+  return { imagePath: FALLBACK_HEADER_IMAGE, source: 'fallback' };
 }
 
 module.exports = { generateCommunityHeaderImage };

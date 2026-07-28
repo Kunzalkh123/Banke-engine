@@ -1,0 +1,4 @@
+﻿# After clicking "Copy to clipboard" on the Shutterstock token dialog
+(Get-Clipboard) | Out-File -Append -Encoding utf8 temp_token.txt
+# After clicking "Copy to clipboard" on the Shutterstock token dialog
+(Get-Clipboard) | Out-File -Append -Encoding utf8 temp_token.txt
