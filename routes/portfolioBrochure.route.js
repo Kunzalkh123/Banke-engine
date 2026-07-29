@@ -108,10 +108,16 @@ async function generateBrochure(req, res, location) {
   );
   const template = handlebars.compile(templateSrc);
 
+  const listingsWithDataUris = (brochureData.listings || []).map((listing) => ({
+    ...listing,
+    imageUrl: listing.imageUrl ? toDataUri(listing.imageUrl) : null,
+  }));
+
   const html = template({
     ...brochureData,
     headerImagePath: brochureData.headerImagePath ? toDataUri(brochureData.headerImagePath) : '',
     logoPath: brochureData.logoPath ? toDataUri(brochureData.logoPath) : null,
+    listings: listingsWithDataUris,
   });
 
   if (req.query.debug === 'html') {
@@ -130,7 +136,7 @@ async function generateBrochure(req, res, location) {
   const browser = await puppeteer.launch({ headless: 'new' });
   const page = await browser.newPage();
   await page.setViewport({ width: 794, height: 1123 });
-  await page.setContent(html, { waitUntil: 'networkidle0' });
+  await page.setContent(html, { waitUntil: 'networkidle0', timeout: 60000 });
 
   const bodyHeight = await page.evaluate(() => document.documentElement.scrollHeight);
 

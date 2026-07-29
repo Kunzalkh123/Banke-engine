@@ -215,6 +215,7 @@ async function searchImages(query) {
       sort: 'popular',
     },
     timeout: 35000,
+    proxy: false,
     httpAgent: shutterstockHttpAgent,
     httpsAgent: shutterstockHttpsAgent,
     // Forcing IPv4: curl consistently connects to this exact host in
@@ -246,6 +247,7 @@ async function licenseImage(imageId) {
         'Content-Type': 'application/json',
       },
       timeout: 35000,
+    proxy: false,
       httpAgent: shutterstockHttpAgent,
       httpsAgent: shutterstockHttpsAgent,
       family: 4,
@@ -429,8 +431,21 @@ async function tryAIGeneration(location, outputDir, filenameHint, aiPrompt) {
   try {
     // Pollinations takes the prompt directly in the URL path, plus a
     // seed for deterministic-per-location output and a size hint.
-    const seed = parseInt(crypto.createHash('md5').update(location || '').digest('hex').slice(0, 8), 16);
-    const url = `${POLLINATIONS_IMAGE_BASE}/${encodeURIComponent(aiPrompt)}?width=1600&height=900&seed=${seed}&nologo=true`;
+    // Cap to a safe positive range well within signed 32-bit bounds
+    // (2,147,483,647). The raw 8-hex-char hash can exceed that ceiling,
+    // which is very likely what Pollinations' "Query parameter validation
+    // failed" error was rejecting -- and since the hash is deterministic
+    // per location string, it would fail the SAME locations every time.
+    const rawSeed = parseInt(crypto.createHash('md5').update(location || '').digest('hex').slice(0, 8), 16);
+    const seed = rawSeed % 1000000;
+    // width and height must both be divisible by 64 -- most diffusion
+    // models (including whatever backs Pollinations here) require this due
+    // to internal downsampling, and reject anything else with a validation
+    // error. 900 was NOT divisible by 64 or even by 8 -- almost certainly
+    // the real cause of the "Query parameter validation failed" errors,
+    // which were 100% consistent across every prompt/seed/location (a bad
+    // fixed dimension explains that far better than a seed range issue).
+    const url = `${POLLINATIONS_IMAGE_BASE}/${encodeURIComponent(aiPrompt)}?width=1600&height=896&seed=${seed}&nologo=true`;
 
     const localPath = await downloadToFile(url, outputDir, filenameHint, {
       'User-Agent': 'Mozilla/5.0 (compatible; BankeBrochureEngine/1.0)',

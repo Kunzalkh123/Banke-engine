@@ -128,6 +128,23 @@ async function buildPortfolioBrochureData(rawJson, outputDir) {
 
   const logoPath = await resolveLocalImage(data.logoUrl, outputDir, `${slug}-logo`);
 
+  // Download every listing image locally BEFORE Puppeteer ever renders the
+  // page. Previously these were passed through as live remote URLs and
+  // fetched by the browser during page.setContent -- if even one S3 URL was
+  // slow or unreachable, Puppeteer's networkidle0 wait would hang until the
+  // 30s navigation timeout and crash the whole request. Resolving them here
+  // (in parallel, with each failure isolated) means rendering never depends
+  // on external network reachability at all.
+  const listingImagePaths = await Promise.all(
+    data.listings.map((listing, index) =>
+      resolveLocalImage(listing.imageUrl, outputDir, `${slug}-listing-${index}`)
+    )
+  );
+  data.listings = data.listings.map((listing, index) => ({
+    ...listing,
+    imageUrl: listingImagePaths[index], // now a local file path, or null if it failed to download
+  }));
+
   const aiDescription = await generateDescription({
     location: data.location,
     agencyName: data.agencyName,
@@ -161,7 +178,7 @@ async function buildPortfolioBrochureData(rawJson, outputDir) {
         fallback: null,
       });
 
-  const stats = data.stats.length
+  const stats = data.stats.lengths
     ? data.stats
     : await generateStats({ location: data.location, listings: data._rawListings });
 

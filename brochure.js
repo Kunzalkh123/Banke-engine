@@ -60,10 +60,16 @@ async function main() {
 
   console.log(`[brochure.js] headerImageDataUri is ${headerImageDataUri ? 'SET (' + headerImageDataUri.length + ' chars)' : 'NULL'}`);
 
+  const listingsWithDataUris = (brochureData.listings || []).map((listing) => ({
+    ...listing,
+    imageUrl: listing.imageUrl ? toDataUri(listing.imageUrl) : null,
+  }));
+
   const html = template({
     ...brochureData,
     headerImagePath: headerImageDataUri || '',
     logoPath: logoDataUri,
+    listings: listingsWithDataUris,
   });
 
   const browser = await puppeteer.launch({ headless: 'new' });
