@@ -110,17 +110,20 @@ async function callGroqText(prompt, attempt = 1, tokenBudget = 4096) {
   let content = response.data?.choices?.[0]?.message?.content;
   const finishReason = response.data?.choices?.[0]?.finish_reason;
 
+  // finish_reason 'length' means the model ran out of token budget before
+  // finishing -- this applies whether content came back completely empty
+  // OR partially written but cut off mid-stream (e.g. a JSON array that
+  // stops mid-string). Previously only the fully-empty case was retried,
+  // so a truncated-but-non-empty response slipped through as if it were
+  // a complete answer, and callers (e.g. JSON.parse in generateStats) had
+  // to fail on malformed content instead of this getting a clean retry.
+  if (finishReason === 'length' && attempt < maxAttempts && tokenBudget < maxTokenBudget) {
+    const biggerBudget = Math.min(tokenBudget * 2, maxTokenBudget);
+    console.warn(`[ai.service] Groq ran out of tokens before finishing (finish_reason: length, content ${content ? 'truncated' : 'empty'}); retrying with max_completion_tokens=${biggerBudget} (attempt ${attempt + 1}/${maxAttempts})...`);
+    return callGroqText(prompt, attempt + 1, biggerBudget);
+  }
+
   if (!content) {
-    // finish_reason 'length' means the model burned the whole token budget
-    // (mostly on hidden reasoning) and never got to write the actual
-    // answer -- not a request error, just not enough room. Retrying with a
-    // bigger budget usually resolves it instead of falling straight to the
-    // fallback copy.
-    if (finishReason === 'length' && attempt < maxAttempts && tokenBudget < maxTokenBudget) {
-      const biggerBudget = Math.min(tokenBudget * 2, maxTokenBudget);
-      console.warn(`[ai.service] Groq ran out of tokens before answering (reasoning used the full budget); retrying with max_completion_tokens=${biggerBudget} (attempt ${attempt + 1}/${maxAttempts})...`);
-      return callGroqText(prompt, attempt + 1, biggerBudget);
-    }
     console.error('[ai.service] Groq response missing content. Full response:', JSON.stringify(response.data).slice(0, 1000));
     throw new Error(`Groq response missing content (finish_reason: ${finishReason || 'unknown'})`);
   }
